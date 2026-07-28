@@ -530,14 +530,16 @@ column5.metric(
 
 st.subheader("Workflow performance")
 
+st.caption(
+    "All timestamps are in AEST."
+)
+
+# Columns displayed in the table
 workflow_display_columns = [
     "incident_id",
     "event_label",
-    "severity",
     "incident_type",
     "country",
-    "state_province",
-    "city",
     "detection_at",
     "ud_at",
     "first_note_at",
@@ -546,27 +548,28 @@ workflow_display_columns = [
     "first_note_status",
     "first_note_sla_met",
     "closure_method",
-    "data_quality_flag"
+    "data_quality_flag",
 ]
 
-# Keep only columns that exist
+# Keep only columns available in the filtered dataset
 workflow_display_columns = [
     column
     for column in workflow_display_columns
     if column in filtered_workflow.columns
 ]
 
-# Keep all incidents
+# Prepare the display table without changing the underlying data
 workflow_display = filtered_workflow[
     workflow_display_columns
-]
+].copy()
 
 st.dataframe(
     workflow_display,
     width="stretch",
     height=245,
-    hide_index=True
+    hide_index=True,
 )
+
 
 # 12. First-note SLA exceptions and summary
 
@@ -838,17 +841,17 @@ if False:
         y="first_note_sla_met"
     )
 
-
 # 14. First-alert outcomes by incident type
 
 st.subheader("First-alert outcomes by incident type")
+
 
 # Keep only the columns required for the chart
 sla_outcomes = filtered_workflow[
     [
         "incident_id",
         "incident_type",
-        "first_note_status"
+        "first_note_status",
     ]
 ].copy()
 
@@ -859,14 +862,21 @@ sla_outcomes["incident_type"] = (
     .fillna("Unknown incident type")
     .astype(str)
     .str.strip()
-    .replace("", "Unknown incident type")
+    .str.lower()
+    .replace("", "unknown incident type")
 )
 
 
-# Optional: rename unclear labels for display only
-# This does not change the original CSV
+# Rename labels for display without changing the original CSV
 incident_type_display_names = {
-    "Security Incident": "Unspecified security incident"
+    "explosion/fire": "Explosion/fire",
+    "protest": "Protest",
+    "shooting": "Shooting",
+    "standoff": "Standoff",
+    "weather": "Weather",
+    "bomb threat": "Bomb threat",
+    "others": "Others",
+    "unknown incident type": "Unknown incident type",
 }
 
 sla_outcomes["incident_type_display"] = (
@@ -875,40 +885,34 @@ sla_outcomes["incident_type_display"] = (
 )
 
 
-# Clean missing status values
+# Clean first-alert outcome labels
 sla_outcomes["first_note_status"] = (
     sla_outcomes["first_note_status"]
     .fillna("Invalid timing")
+    .astype(str)
+    .str.strip()
+    .replace("", "Invalid timing")
 )
 
 
-# Use each incident type directly as its chart category
-sla_outcomes["chart_incident_type"] = (
-    sla_outcomes["incident_type_display"]
-)
-
-
-# Fixed display order for outcomes
+# Fixed outcome order and colours
 status_order = [
     "SLA met",
     "Late first alert",
     "Missing first alert",
-    "Invalid timing"
+    "Invalid timing",
 ]
 
 status_colours = [
     "#5B7CFA",
     "#E6AC55",
     "#D98675",
-    "#A8ADB7"
+    "#A8ADB7",
 ]
 
 status_rank = {
     status: rank
-    for rank, status in enumerate(
-        status_order,
-        start=1
-    )
+    for rank, status in enumerate(status_order, start=1)
 }
 
 sla_outcomes["status_rank"] = (
@@ -919,266 +923,338 @@ sla_outcomes["status_rank"] = (
 )
 
 
-# Count unique incidents by chart category and outcome
+# Count unique incidents by incident type and first-alert outcome
 sla_by_incident_type = (
     sla_outcomes
     .groupby(
         [
-            "chart_incident_type",
+            "incident_type_display",
             "first_note_status",
-            "status_rank"
+            "status_rank",
         ],
         as_index=False,
-        observed=True
+        observed=True,
     )
     .agg(
         incident_count=(
             "incident_id",
-            "nunique"
+            "nunique",
         )
     )
 )
 
 
-# Calculate total incidents for each chart category
-incident_type_totals = (
-    sla_by_incident_type
-    .groupby(
-        "chart_incident_type",
-        as_index=False,
-        observed=True
-    )
-    .agg(
-        total_incidents=(
-            "incident_count",
-            "sum"
+if sla_by_incident_type.empty:
+    st.info("No incidents match the selected filters.")
+
+else:
+    # Calculate total incidents for each incident type
+    incident_type_totals = (
+        sla_by_incident_type
+        .groupby(
+            "incident_type_display",
+            as_index=False,
+            observed=True,
+        )
+        .agg(
+            total_incidents=(
+                "incident_count",
+                "sum",
+            )
         )
     )
-    .sort_values(
-        [
-            "total_incidents",
-            "chart_incident_type"
-        ],
-        ascending=[
-            False,
-            True
-        ]
+
+
+    # Add totals to the chart data
+    sla_by_incident_type = (
+        sla_by_incident_type
+        .merge(
+            incident_type_totals,
+            on="incident_type_display",
+            how="left",
+        )
     )
-)
 
 
-# Add total values to the chart data
-sla_by_incident_type = (
-    sla_by_incident_type
-    .merge(
-        incident_type_totals,
-        on="chart_incident_type",
-        how="left"
+    # Calculate percentages for the tooltip
+    sla_by_incident_type["outcome_percentage"] = (
+        sla_by_incident_type["incident_count"]
+        .div(sla_by_incident_type["total_incidents"])
+        .mul(100)
     )
-)
 
-
-# Calculate percentages for the tooltip
-sla_by_incident_type["outcome_percentage"] = (
-    sla_by_incident_type["incident_count"]
-    .div(
-        sla_by_incident_type["total_incidents"]
+    sla_by_incident_type["outcome_percentage_text"] = (
+        sla_by_incident_type["outcome_percentage"]
+        .map(lambda value: f"{value:.1f}%")
     )
-    .mul(100)
-)
-
-sla_by_incident_type["outcome_percentage_text"] = (
-    sla_by_incident_type["outcome_percentage"]
-    .map(lambda value: f"{value:.1f}%")
-)
 
 
-# Sort categories from highest to lowest incident volume
-incident_type_order = (
-    incident_type_totals["chart_incident_type"]
-    .tolist()
-)
+    # Keep incident types in a stable order as the dataset grows
+    preferred_incident_type_order = [
+        "Explosion/fire",
+        "Protest",
+        "Shooting",
+        "Standoff",
+        "Weather",
+        "Bomb threat",
+        "Others",
+        "Unknown incident type",
+    ]
 
-
-# Give each category enough vertical space
-number_of_categories = len(incident_type_order)
-
-chart_height = max(
-    360,
-    number_of_categories * 52
-)
-
-
-# Create thicker horizontal stacked bars
-bars = (
-    alt.Chart(sla_by_incident_type)
-    .mark_bar(
-        size=32,
-        cornerRadiusEnd=4,
-        opacity=0.92
+    present_incident_types = set(
+        incident_type_totals["incident_type_display"]
     )
-    .encode(
-        y=alt.Y(
-            "chart_incident_type:N",
-            title=None,
-            sort=incident_type_order,
-            axis=alt.Axis(
-                labelLimit=260,
-                labelPadding=12,
-                labelFontSize=13,
-                domain=False,
-                tickSize=0
-            )
-        ),
 
-        x=alt.X(
-            "incident_count:Q",
-            title="Number of incidents",
-            stack="zero",
-            axis=alt.Axis(
-                tickMinStep=1,
-                titlePadding=14,
-                domain=False,
-                tickSize=0,
-                grid=True
-            )
-        ),
+    incident_type_order = [
+        incident_type
+        for incident_type in preferred_incident_type_order
+        if incident_type in present_incident_types
+    ]
 
-        color=alt.Color(
-            "first_note_status:N",
-            title=None,
-            scale=alt.Scale(
-                domain=status_order,
-                range=status_colours
+    # Preserve any unexpected categories instead of dropping them
+    unexpected_incident_types = sorted(
+        present_incident_types
+        - set(preferred_incident_type_order)
+    )
+
+    incident_type_order.extend(unexpected_incident_types)
+
+
+    # Give every visible category consistent vertical space
+    number_of_categories = len(incident_type_order)
+    space_per_category = 50
+    minimum_chart_height = 120
+
+    chart_height = max(
+        minimum_chart_height,
+        number_of_categories * space_per_category,
+    )
+
+
+    # Reserve horizontal space for the total labels
+    maximum_total = int(
+        incident_type_totals["total_incidents"].max()
+    )
+
+    x_axis_maximum = max(
+        2,
+        int(maximum_total * 1.15) + 1,
+    )
+
+
+    # Create horizontal stacked bars
+    bars = (
+        alt.Chart(sla_by_incident_type)
+        .mark_bar(
+            size=30,
+            cornerRadiusEnd=4,
+            opacity=0.92,
+        )
+        .encode(
+            y=alt.Y(
+                "incident_type_display:N",
+                title=None,
+                sort=incident_type_order,
+                axis=alt.Axis(
+                    labelLimit=260,
+                    labelPadding=12,
+                    labelFontSize=13,
+                    domain=False,
+                    tickSize=0,
+                ),
             ),
-            legend=alt.Legend(
-                orient="top",
-                direction="horizontal",
-                symbolType="square",
-                symbolSize=120,
-                labelLimit=190,
-                offset=14
-            )
-        ),
 
-        order=alt.Order(
-            "status_rank:Q",
-            sort="ascending"
-        ),
-
-        tooltip=[
-            alt.Tooltip(
-                "chart_incident_type:N",
-                title="Incident type"
-            ),
-            alt.Tooltip(
-                "first_note_status:N",
-                title="First-alert outcome"
-            ),
-            alt.Tooltip(
+            x=alt.X(
                 "incident_count:Q",
-                title="Incidents",
-                format=".0f"
+                title="Number of incidents",
+                stack="zero",
+                scale=alt.Scale(
+                    domain=[0, x_axis_maximum],
+                    nice=True,
+                ),
+                axis=alt.Axis(
+                    tickMinStep=1,
+                    titlePadding=14,
+                    domain=False,
+                    tickSize=0,
+                    grid=True,
+                ),
             ),
-            alt.Tooltip(
-                "outcome_percentage_text:N",
-                title="Share of category"
+
+            color=alt.Color(
+                "first_note_status:N",
+                title=None,
+                scale=alt.Scale(
+                    domain=status_order,
+                    range=status_colours,
+                ),
+                legend=alt.Legend(
+                    orient="top",
+                    direction="horizontal",
+                    symbolType="square",
+                    symbolSize=120,
+                    labelLimit=190,
+                    offset=14,
+                ),
             ),
-            alt.Tooltip(
+
+            order=alt.Order(
+                "status_rank:Q",
+                sort="ascending",
+            ),
+
+            tooltip=[
+                alt.Tooltip(
+                    "incident_type_display:N",
+                    title="Incident type",
+                ),
+                alt.Tooltip(
+                    "first_note_status:N",
+                    title="First-alert outcome",
+                ),
+                alt.Tooltip(
+                    "incident_count:Q",
+                    title="Incidents",
+                    format=".0f",
+                ),
+                alt.Tooltip(
+                    "outcome_percentage_text:N",
+                    title="Share of category",
+                ),
+                alt.Tooltip(
+                    "total_incidents:Q",
+                    title="Category total",
+                    format=".0f",
+                ),
+            ],
+        )
+    )
+
+
+    # Add the total count at the end of each bar
+    total_labels = (
+        alt.Chart(incident_type_totals)
+        .mark_text(
+            dx=10,
+            align="left",
+            baseline="middle",
+            fontSize=13,
+            fontWeight=600,
+            color="#2C2C2E",
+        )
+        .encode(
+            y=alt.Y(
+                "incident_type_display:N",
+                sort=incident_type_order,
+            ),
+
+            x=alt.X(
                 "total_incidents:Q",
-                title="Category total",
-                format=".0f"
-            )
-        ]
-    )
-)
+                scale=alt.Scale(
+                    domain=[0, x_axis_maximum],
+                    nice=True,
+                ),
+            ),
 
-
-# Add total count at the end of each bar
-total_labels = (
-    alt.Chart(incident_type_totals)
-    .mark_text(
-        dx=10,
-        align="left",
-        baseline="middle",
-        fontSize=13,
-        fontWeight=600,
-        color="#2C2C2E"
-    )
-    .encode(
-        y=alt.Y(
-            "chart_incident_type:N",
-            sort=incident_type_order
-        ),
-
-        x=alt.X(
-            "total_incidents:Q"
-        ),
-
-        text=alt.Text(
-            "total_incidents:Q",
-            format=".0f"
-        )
-    )
-)
-
-
-# Combine chart layers
-sla_chart = (
-    (bars + total_labels)
-    .properties(
-        height=chart_height
-    )
-    .configure_view(
-        stroke=None,
-        fill="#FBFCFE"
-    )
-    .configure_axis(
-        gridColor="#E6EAF0",
-        gridOpacity=0.8,
-        domainColor="#D1D6DE",
-        tickColor="#D1D6DE",
-        labelColor="#48484A",
-        titleColor="#2C2C2E",
-        labelFont="Arial",
-        titleFont="Arial",
-        labelFontSize=12,
-        titleFontSize=13,
-        titleFontWeight=500
-    )
-    .configure_legend(
-        labelColor="#48484A",
-        labelFont="Arial",
-        labelFontSize=12,
-        symbolStrokeWidth=0
-    )
-)
-
-
-st.altair_chart(
-    sla_chart,
-    width="stretch",
-    theme=None
-)
-
-with st.expander("Review incident-type labels"):
-    incident_type_review = (
-        filtered_workflow
-        .groupby("incident_type", dropna=False)
-        ["incident_id"]
-        .nunique()
-        .reset_index(name="Incident count")
-        .sort_values(
-            "Incident count",
-            ascending=False
+            text=alt.Text(
+                "total_incidents:Q",
+                format=".0f",
+            ),
         )
     )
 
-    st.dataframe(
-        incident_type_review,
+
+    # Combine and style the chart
+    sla_chart = (
+        (bars + total_labels)
+        .properties(
+            height=chart_height,
+        )
+        .configure_view(
+            stroke=None,
+            fill="#FBFCFE",
+        )
+        .configure_axis(
+            gridColor="#E6EAF0",
+            gridOpacity=0.8,
+            domainColor="#D1D6DE",
+            tickColor="#D1D6DE",
+            labelColor="#48484A",
+            titleColor="#2C2C2E",
+            labelFont="Arial",
+            titleFont="Arial",
+            labelFontSize=12,
+            titleFontSize=13,
+            titleFontWeight=500,
+        )
+        .configure_legend(
+            labelColor="#48484A",
+            labelFont="Arial",
+            labelFontSize=12,
+            symbolStrokeWidth=0,
+        )
+    )
+
+
+    st.altair_chart(
+        sla_chart,
         width="stretch",
-        hide_index=True
+        theme=None,
     )
+
+
+with st.expander("Review incidents classified as Others"):
+    others_review = filtered_workflow.copy()
+
+    others_review["incident_type_normalized"] = (
+        others_review["incident_type"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.lower()
+    )
+
+    others_review = others_review.loc[
+        others_review["incident_type_normalized"].eq("others")
+    ].copy()
+
+    review_column_candidates = [
+        "incident_id",
+        "event_label",
+        "city",
+        "state_province",
+        "country",
+        "incident_type",
+    ]
+
+    review_columns = [
+        column
+        for column in review_column_candidates
+        if column in others_review.columns
+    ]
+
+    others_review = (
+        others_review[review_columns]
+        .drop_duplicates()
+        .sort_values("incident_id")
+    )
+
+    if others_review.empty:
+        st.info(
+            "No incidents classified as Others match the selected filters."
+        )
+    else:
+        st.caption(
+            "Review these incidents to decide whether any should be "
+            "reclassified into a more specific incident type."
+        )
+
+        st.dataframe(
+            others_review,
+            width="stretch",
+            hide_index=True,
+        )
+
 
 # 15. Data-quality checks
 

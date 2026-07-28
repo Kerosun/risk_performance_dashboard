@@ -400,22 +400,35 @@ if filtered_workflow.empty:
     st.warning("No incidents match the selected filters.")
     st.stop()
 
-
-# 10. KPI cards
-
 # 10. Calculate and display KPI cards
 
-total_incidents = filtered_workflow["incident_id"].nunique()
+# Total number of rows in the original incidents CSV
+# This represents the total number of uploaded incident records
+all_incidents = len(incidents)
 
-# Keep only valid response times
+# Number of unique incidents matching the current sidebar filters
+filtered_incidents = (
+    filtered_workflow["incident_id"]
+    .dropna()
+    .nunique()
+)
+
+# Display as: filtered (total)
+incident_count_text = (
+    f"{filtered_incidents} ({all_incidents})"
+)
+
+
+# Keep only valid detection-to-U&D times
 valid_detection_to_ud = (
     filtered_workflow.loc[
-        filtered_workflow["detection_to_ud_seconds"] >= 0,
+        filtered_workflow["detection_to_ud_seconds"].ge(0),
         "detection_to_ud_seconds"
     ]
     .dropna()
 )
 
+# Keep only valid first-alert response times
 valid_first_note_times = (
     filtered_workflow.loc[
         filtered_workflow["first_note_status"].isin(
@@ -426,12 +439,22 @@ valid_first_note_times = (
     .dropna()
 )
 
-median_detection_to_ud = valid_detection_to_ud.median()
 
-median_first_note = valid_first_note_times.median()
+# Calculate timing KPIs
+median_detection_to_ud = (
+    valid_detection_to_ud.median()
+)
 
-p90_first_note = valid_first_note_times.quantile(0.90)
+median_first_note = (
+    valid_first_note_times.median()
+)
 
+p90_first_note = (
+    valid_first_note_times.quantile(0.90)
+)
+
+
+# Calculate SLA compliance using valid first-alert records only
 valid_sla_results = (
     filtered_workflow["first_note_sla_met"]
     .dropna()
@@ -449,39 +472,57 @@ else:
 
     sla_rate_text = f"{sla_rate:.1f}%"
 
-column1, column2, column3, column4, column5 = st.columns(5)
+
+# Create five KPI columns
+column1, column2, column3, column4, column5 = (
+    st.columns(5)
+)
+
 
 column1.metric(
-    "Total incidents",
-    total_incidents
+    label="Incidents shown (total)",
+    value=incident_count_text,
+    help=(
+        "The first number is the number of unique incidents "
+        "matching the current filters. The number in brackets "
+        "is the total number of incident rows in the uploaded "
+        "incidents CSV."
+    )
 )
 
 column2.metric(
-    "Median detection → U&D",
-    format_duration(median_detection_to_ud)
+    label="Median detection → U&D",
+    value=format_duration(
+        median_detection_to_ud
+    )
 )
 
 column3.metric(
-    "Median U&D → first alert",
-    format_duration(median_first_note)
+    label="Median U&D → first alert",
+    value=format_duration(
+        median_first_note
+    )
 )
 
 column4.metric(
-    "P90 U&D → first alert",
-    format_duration(p90_first_note),
+    label="P90 U&D → first alert",
+    value=format_duration(
+        p90_first_note
+    ),
     help=(
-        "90% of incidents received their first RTC Alert "
-        "within this amount of time."
+        "About 90% of incidents with a valid first-alert time "
+        "received their first alert within this duration. "
+        "The slowest 10% took longer."
     )
 )
 
 column5.metric(
-    "First-alert SLA compliance",
-    sla_rate_text,
+    label="First-alert SLA compliance",
+    value=sla_rate_text,
     help=(
-        "Calculated only from incidents with a valid positive "
-        "first-alert response time. Missing, zero and invalid "
-        "timings are excluded."
+        "The percentage of incidents with a valid positive "
+        "first-alert response time that met the 120-second target. "
+        "Missing, zero and invalid timings are excluded."
     )
 )
 
@@ -531,7 +572,9 @@ st.dataframe(
 
 st.subheader("First-note SLA exceptions")
 
+
 # Identify exception types
+
 missing_first_alert_mask = (
     filtered_workflow["first_note_status"]
     .eq("Missing first alert")
@@ -547,14 +590,22 @@ invalid_timing_mask = (
     .eq("Invalid timing")
 )
 
+
 # Count incidents
-total_incidents = filtered_workflow["incident_id"].nunique()
+
+# Number of unique incidents currently included by the filters
+selected_incident_count = (
+    filtered_workflow["incident_id"]
+    .dropna()
+    .nunique()
+)
 
 late_first_alert_count = (
     filtered_workflow.loc[
         late_first_alert_mask,
         "incident_id"
     ]
+    .dropna()
     .nunique()
 )
 
@@ -563,28 +614,48 @@ missing_first_alert_count = (
         missing_first_alert_mask,
         "incident_id"
     ]
+    .dropna()
     .nunique()
 )
 
-# Calculate percentages
-if total_incidents > 0:
+invalid_timing_count = (
+    filtered_workflow.loc[
+        invalid_timing_mask,
+        "incident_id"
+    ]
+    .dropna()
+    .nunique()
+)
+
+
+# Calculate percentages based on selected incidents
+
+if selected_incident_count > 0:
     late_first_alert_percentage = (
         late_first_alert_count
-        / total_incidents
+        / selected_incident_count
         * 100
     )
 
     missing_first_alert_percentage = (
         missing_first_alert_count
-        / total_incidents
+        / selected_incident_count
+        * 100
+    )
+
+    invalid_timing_percentage = (
+        invalid_timing_count
+        / selected_incident_count
         * 100
     )
 else:
-    late_first_alert_percentage = 0
-    missing_first_alert_percentage = 0
+    late_first_alert_percentage = 0.0
+    missing_first_alert_percentage = 0.0
+    invalid_timing_percentage = 0.0
 
 
 # Create the exception table
+
 sla_exceptions = (
     filtered_workflow[
         late_first_alert_mask
@@ -598,14 +669,19 @@ sla_exceptions = (
     )
 )
 
+
 exception_columns = [
     "incident_id",
     "event_label",
     "incident_type",
+    "country",
+    "state_province",
+    "city",
     "first_note_seconds",
     "first_note_status",
     "data_quality_flag"
 ]
+
 
 # Keep only columns that exist
 exception_columns = [
@@ -614,6 +690,7 @@ exception_columns = [
     if column in sla_exceptions.columns
 ]
 
+
 exception_display = (
     sla_exceptions[exception_columns]
     .rename(
@@ -621,12 +698,16 @@ exception_display = (
             "incident_id": "Incident ID",
             "event_label": "Incident",
             "incident_type": "Incident type",
+            "country": "Country",
+            "state_province": "State / Province",
+            "city": "City",
             "first_note_seconds": "First alert (seconds)",
             "first_note_status": "Status",
             "data_quality_flag": "Data-quality flag"
         }
     )
 )
+
 
 # Exception table and KPI summary
 
@@ -636,13 +717,12 @@ table_column, summary_column = st.columns(
     vertical_alignment="top"
 )
 
-# Both content areas use exactly the same height
-section_height = 290
+section_height = 320
 
 
-# Left side
+# Left side: exception table
+
 with table_column:
-
     st.dataframe(
         exception_display,
         width="stretch",
@@ -657,6 +737,15 @@ with table_column:
                 width="medium"
             ),
             "Incident type": st.column_config.TextColumn(
+                width="small"
+            ),
+            "Country": st.column_config.TextColumn(
+                width="small"
+            ),
+            "State / Province": st.column_config.TextColumn(
+                width="small"
+            ),
+            "City": st.column_config.TextColumn(
                 width="small"
             ),
             "First alert (seconds)":
@@ -675,10 +764,9 @@ with table_column:
     )
 
 
-# Right side
-with summary_column:
+# Right side: exception summary
 
-    # Same fixed height as the table
+with summary_column:
     with st.container(
         border=True,
         height=section_height,
@@ -691,8 +779,7 @@ with summary_column:
             help=(
                 "Valid first alerts issued more than "
                 "120 seconds after U&D."
-            ),
-            height="content"
+            )
         )
 
         st.caption(
@@ -706,10 +793,9 @@ with summary_column:
             label="Missing first alerts",
             value=missing_first_alert_count,
             help=(
-                "Includes missing or zero-second "
-                "first-alert times."
-            ),
-            height="content"
+                "Includes incidents with a missing or "
+                "zero-second first-alert time."
+            )
         )
 
         st.caption(
@@ -717,6 +803,22 @@ with summary_column:
             "of selected incidents"
         )
 
+        st.divider()
+
+        st.metric(
+            label="Invalid timings",
+            value=invalid_timing_count,
+            help=(
+                "Incidents where the first-alert timestamp "
+                "appears before the U&D timestamp."
+            )
+        )
+
+        st.caption(
+            f"{invalid_timing_percentage:.1f}% "
+            "of selected incidents"
+        )
+        
 
 # 13. SLA compliance by severity — currently hidden
 if False:
@@ -741,7 +843,7 @@ if False:
 
 st.subheader("First-alert outcomes by incident type")
 
-# Keep only the columns required for this chart
+# Keep only the columns required for the chart
 sla_outcomes = filtered_workflow[
     [
         "incident_id",
@@ -750,23 +852,43 @@ sla_outcomes = filtered_workflow[
     ]
 ].copy()
 
+
 # Clean incident-type labels
 sla_outcomes["incident_type"] = (
     sla_outcomes["incident_type"]
-    .fillna("Unknown")
+    .fillna("Unknown incident type")
     .astype(str)
     .str.strip()
-    .replace("", "Unknown")
+    .replace("", "Unknown incident type")
 )
 
-# first_note_status should already exist,
-# but this prevents unexpected missing values
+
+# Optional: rename unclear labels for display only
+# This does not change the original CSV
+incident_type_display_names = {
+    "Security Incident": "Unspecified security incident"
+}
+
+sla_outcomes["incident_type_display"] = (
+    sla_outcomes["incident_type"]
+    .replace(incident_type_display_names)
+)
+
+
+# Clean missing status values
 sla_outcomes["first_note_status"] = (
     sla_outcomes["first_note_status"]
     .fillna("Invalid timing")
 )
 
-# Fixed display order for stacked bars and legend
+
+# Use each incident type directly as its chart category
+sla_outcomes["chart_incident_type"] = (
+    sla_outcomes["incident_type_display"]
+)
+
+
+# Fixed display order for outcomes
 status_order = [
     "SLA met",
     "Late first alert",
@@ -774,15 +896,13 @@ status_order = [
     "Invalid timing"
 ]
 
-# Coordinated Apple-inspired technology palette
 status_colours = [
-    "#5B7CFA",  # SLA met — soft Apple blue
-    "#E6AC55",  # Late first alert — muted amber
-    "#D98675",  # Missing first alert — soft coral
-    "#A8ADB7"   # Invalid timing — cool grey
+    "#5B7CFA",
+    "#E6AC55",
+    "#D98675",
+    "#A8ADB7"
 ]
 
-# Numeric order helps Altair stack the outcomes consistently
 status_rank = {
     status: rank
     for rank, status in enumerate(
@@ -798,12 +918,13 @@ sla_outcomes["status_rank"] = (
     .astype(int)
 )
 
-# Count unique incidents by incident type and SLA outcome
+
+# Count unique incidents by chart category and outcome
 sla_by_incident_type = (
     sla_outcomes
     .groupby(
         [
-            "incident_type",
+            "chart_incident_type",
             "first_note_status",
             "status_rank"
         ],
@@ -818,11 +939,12 @@ sla_by_incident_type = (
     )
 )
 
-# Calculate the total number of incidents for each incident type
+
+# Calculate total incidents for each chart category
 incident_type_totals = (
     sla_by_incident_type
     .groupby(
-        "incident_type",
+        "chart_incident_type",
         as_index=False,
         observed=True
     )
@@ -835,7 +957,7 @@ incident_type_totals = (
     .sort_values(
         [
             "total_incidents",
-            "incident_type"
+            "chart_incident_type"
         ],
         ascending=[
             False,
@@ -844,17 +966,19 @@ incident_type_totals = (
     )
 )
 
-# Add totals to the chart dataset
+
+# Add total values to the chart data
 sla_by_incident_type = (
     sla_by_incident_type
     .merge(
         incident_type_totals,
-        on="incident_type",
+        on="chart_incident_type",
         how="left"
     )
 )
 
-# Calculate each outcome's percentage within its incident type
+
+# Calculate percentages for the tooltip
 sla_by_incident_type["outcome_percentage"] = (
     sla_by_incident_type["incident_count"]
     .div(
@@ -863,33 +987,45 @@ sla_by_incident_type["outcome_percentage"] = (
     .mul(100)
 )
 
-# Pre-format the percentage for the tooltip
 sla_by_incident_type["outcome_percentage_text"] = (
     sla_by_incident_type["outcome_percentage"]
     .map(lambda value: f"{value:.1f}%")
 )
 
-# Sort incident types from highest to lowest volume
+
+# Sort categories from highest to lowest incident volume
 incident_type_order = (
-    incident_type_totals["incident_type"]
+    incident_type_totals["chart_incident_type"]
     .tolist()
 )
 
-# Create horizontal stacked bars
+
+# Give each category enough vertical space
+number_of_categories = len(incident_type_order)
+
+chart_height = max(
+    360,
+    number_of_categories * 52
+)
+
+
+# Create thicker horizontal stacked bars
 bars = (
     alt.Chart(sla_by_incident_type)
     .mark_bar(
-        size=24,
-        opacity=0.9
+        size=32,
+        cornerRadiusEnd=4,
+        opacity=0.92
     )
     .encode(
         y=alt.Y(
-            "incident_type:N",
+            "chart_incident_type:N",
             title=None,
             sort=incident_type_order,
             axis=alt.Axis(
-                labelLimit=220,
-                labelPadding=10,
+                labelLimit=260,
+                labelPadding=12,
+                labelFontSize=13,
                 domain=False,
                 tickSize=0
             )
@@ -901,7 +1037,7 @@ bars = (
             stack="zero",
             axis=alt.Axis(
                 tickMinStep=1,
-                titlePadding=12,
+                titlePadding=14,
                 domain=False,
                 tickSize=0,
                 grid=True
@@ -912,28 +1048,18 @@ bars = (
             "first_note_status:N",
             title=None,
             scale=alt.Scale(
-                domain=[
-                    "SLA met",
-                    "Late first alert",
-                    "Missing first alert",
-                    "Invalid timing"
-                ],
-                range=[
-                    "#5B7CFA",
-                    "#E6AC55",
-                    "#D98675",
-                    "#A8ADB7"
-                ]
+                domain=status_order,
+                range=status_colours
             ),
             legend=alt.Legend(
                 orient="top",
                 direction="horizontal",
                 symbolType="square",
-                symbolSize=110,
-                labelLimit=180,
-                offset=12
+                symbolSize=120,
+                labelLimit=190,
+                offset=14
             )
-        ),  # This comma was missing
+        ),
 
         order=alt.Order(
             "status_rank:Q",
@@ -942,12 +1068,12 @@ bars = (
 
         tooltip=[
             alt.Tooltip(
-                "incident_type:N",
+                "chart_incident_type:N",
                 title="Incident type"
             ),
             alt.Tooltip(
                 "first_note_status:N",
-                title="Outcome"
+                title="First-alert outcome"
             ),
             alt.Tooltip(
                 "incident_count:Q",
@@ -956,27 +1082,32 @@ bars = (
             ),
             alt.Tooltip(
                 "outcome_percentage_text:N",
-                title="Share of incident type"
+                title="Share of category"
+            ),
+            alt.Tooltip(
+                "total_incidents:Q",
+                title="Category total",
+                format=".0f"
             )
         ]
     )
 )
 
 
-# Add the total count at the end of each bar
+# Add total count at the end of each bar
 total_labels = (
     alt.Chart(incident_type_totals)
     .mark_text(
-        dx=8,
+        dx=10,
         align="left",
         baseline="middle",
-        fontSize=12,
+        fontSize=13,
         fontWeight=600,
         color="#2C2C2E"
     )
     .encode(
         y=alt.Y(
-            "incident_type:N",
+            "chart_incident_type:N",
             sort=incident_type_order
         ),
 
@@ -992,11 +1123,11 @@ total_labels = (
 )
 
 
-# Combine the stacked bars and total labels
+# Combine chart layers
 sla_chart = (
-    (bars + total_labels)  # Use total_labels, not totals
+    (bars + total_labels)
     .properties(
-        height=340
+        height=chart_height
     )
     .configure_view(
         stroke=None,
@@ -1023,11 +1154,31 @@ sla_chart = (
     )
 )
 
+
 st.altair_chart(
     sla_chart,
     width="stretch",
     theme=None
 )
+
+with st.expander("Review incident-type labels"):
+    incident_type_review = (
+        filtered_workflow
+        .groupby("incident_type", dropna=False)
+        ["incident_id"]
+        .nunique()
+        .reset_index(name="Incident count")
+        .sort_values(
+            "Incident count",
+            ascending=False
+        )
+    )
+
+    st.dataframe(
+        incident_type_review,
+        width="stretch",
+        hide_index=True
+    )
 
 # 15. Data-quality checks
 
